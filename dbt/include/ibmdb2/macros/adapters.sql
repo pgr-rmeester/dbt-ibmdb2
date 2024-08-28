@@ -1,5 +1,9 @@
 
 {% macro case_relation_part(quoting, relation_part) %}
+
+{{ log(">>> case_relation_part <<<") }}
+{{ log(relation_part) }}
+
   {% if quoting == False %}
     {%- set relation_part = relation_part|upper -%}
   {% endif %}
@@ -9,73 +13,90 @@
 
 {% macro ibmdb2__check_schema_exists(information_schema, schema) -%}
 
+{{ log(">>> ibmdb2__check_schema_exists <<<") }}
+{{ log(schema) }}
+
+  {%- set database = case_relation_part(information_database.quote_policy['database'], '') -%}
   {# This schema will ignore quoting and therefore also upper vs lowercase #}
   {%- set schema = case_relation_part(information_schema.quote_policy['schema'], schema) -%}
 
   {% set sql -%}
 
-SELECT COUNT(*)
-FROM SYSCAT.SCHEMATA
-WHERE SCHEMANAME = '{{ schema }}'
+    select count(*) 
+    from sysibm.systables 
+    where 
+      dbname = '{{ database }}' and
+      creator = '{{ schema }}'
 
   {%- endset %}
+
   {{ return(run_query(sql)) }}
+
 {% endmacro %}
 
 
 {% macro ibmdb2__create_schema(relation) -%}
+{{ log(">>> ibmdb2__create_schema <<<") }}
+{{ log(relation) }}
   {%- call statement('create_schema') -%}
 
-  {%- set schema = case_relation_part(relation.quote_policy['schema'], relation.without_identifier()) -%}
+    {%- set schema = case_relation_part(relation.quote_policy['schema'], relation.without_identifier()) -%}
+    {{ log(schema) }}
+    begin
+      declare v_count int;
 
-BEGIN
-  IF NOT EXISTS (
-    SELECT SCHEMANAME
-    FROM SYSCAT.SCHEMATA
-    WHERE SCHEMANAME = '{{ schema }}'
-  ) THEN
-    PREPARE stmt FROM 'CREATE SCHEMA {{ schema }}';
-    EXECUTE stmt;
-  END IF;
-END
+      select count(*) into v_count
+      from sysibm.systables
+      where creator = '{{ schema }}';
 
+      if v_count = 0 then
+        prepare stmt from 'create schema {{ schema }}';
+        execute stmt;
+      end if;
+    
+    end;
   {%- endcall -%}
 {% endmacro %}
 
 
+
 {% macro ibmdb2__drop_schema(relation) -%}
+{{ log(">>> ibmdb2__drop_schema") }}
   {%- call statement('drop_schema') -%}
 
+  {%- set database = case_relation_part(relation.quote_policy['database'], relation.schema) -%}
   {%- set schema = case_relation_part(relation.quote_policy['schema'], relation.schema) -%}
 
-BEGIN
-	FOR t AS
-    SELECT
-      TABNAME,
-      TABSCHEMA,
-      (CASE WHEN TYPE='T' THEN 'TABLE' ELSE 'VIEW' END) AS TYPE
-    FROM SYSCAT.TABLES t
-    WHERE TABSCHEMA = '{{ schema }}'
-		DO
-			PREPARE stmt FROM 'DROP '||t.TYPE||' '||t.TABSCHEMA||'.'||t.TABNAME;
-			EXECUTE stmt;
-	END FOR;
-  IF EXISTS (
-    SELECT SCHEMANAME
-    FROM SYSCAT.SCHEMATA
-    WHERE SCHEMANAME = '{{ schema }}'
-  ) THEN
-    PREPARE stmt FROM 'DROP SCHEMA {{ schema }} RESTRICT';
-    EXECUTE stmt;
-  END IF;
-END
+begin
+	for t as
+    select 
+      name as tabname, 
+      creator as tabschema,
+      (case when type='T' then 'TABLE' else 'VIEW' end) as type 
+    from sysibm.systables 
+    where creator = '{{ schema }}'
+    
+		do
+			prepare stmt from 'drop '||t.type||' '||t.tabschema||'.'||t.tabname;
+			execute stmt;
+	end for;
+  if exists (
+    select distinct 
+      creator as schemaname 
+    from sysibm.systables 
+    where dbname = '{{ database }}' and creator = '{{ schema }}'
+  ) then
+    prepare stmt from 'drop schema {{ schema }} restrict';
+    execute stmt;
+  end if;
+end
 
   {% endcall %}
 {% endmacro %}
 
 
 {% macro ibmdb2__create_table_as(temporary, relation, sql) -%}
-
+{{ log(">>> ibmdb2__create_table_as") }}
   {%- set sql_header = config.get('sql_header', none) -%}
   {%- set table_space = config.get('table_space', none) -%}
   {%- set organize_by = config.get('organize_by', none) -%}
@@ -84,25 +105,25 @@ END
   {{ sql_header if sql_header is not none }}
 
   {# Ignore temporary table type #}
-CREATE TABLE {{ relation }} AS (
+create table {{ relation }} as (
   {{ sql }}
 )
-WITH DATA
+with data
 
   {%- if table_space is not none -%}
     {{ ' ' }}
-IN {{ table_space | upper  }}
+in {{ table_space | upper  }}
   {%- endif -%}
 
   {%- if organize_by is not none -%}
     {{ ' ' }}
-ORGANIZE BY {{ organize_by | upper }}
+organize by {{ organize_by | upper }}
   {%- endif -%}
 
   {%- if distribute_by is not none -%}
     {%- set distribute_by_type = distribute_by['type'] | lower -%}
     {{ ' ' }}
-DISTRIBUTE BY {{ distribute_by_type | upper }}
+distribute by {{ distribute_by_type | upper }}
     {%- if distribute_by_type == 'hash' -%}
       {%- set distribute_by_columns = distribute_by['columns'] -%}
 (
@@ -118,70 +139,79 @@ DISTRIBUTE BY {{ distribute_by_type | upper }}
 
 
 {% macro ibmdb2__create_view_as(relation, sql) -%}
-
   {%- set sql_header = config.get('sql_header', none) -%}
 
   {{ sql_header if sql_header is not none }}
-CREATE VIEW {{ relation }} AS 
+create view {{ relation }} as 
   {{ sql }}
 
 {% endmacro %}
 
 
 {% macro ibmdb2__get_columns_in_relation(relation) -%}
+
   {% call statement('get_columns_in_relation', fetch_result=True) %}
 
+  {%- set database = case_relation_part(relation.quote_policy['database'], relation.database) -%}
   {%- set schema = case_relation_part(relation.quote_policy['schema'], relation.schema) -%}
   {%- set identifier = case_relation_part(relation.quote_policy['identifier'], relation.identifier) -%}
-
-SELECT
-  TRIM(COLNAME) AS "name",
-  TRIM(TYPENAME) AS "type",
-  LENGTH AS "character_maximum_length",
-  LENGTH AS "numeric_precision",
-  SCALE AS "numeric_scale"
-FROM SYSCAT.COLUMNS
-WHERE TABNAME = '{{ identifier }}'
-  {% if relation.schema %}
-  AND TABSCHEMA = '{{ schema }}'
-  {% endif %}
-  AND HIDDEN = ''
-ORDER BY colno
+select
+  trim(syscolumns.name) as "name",
+  trim(syscolumns.typename) as "type",
+  syscolumns.length as "character_maximum_length",
+  syscolumns.length as "numeric_precision",
+  syscolumns.scale as "numeric_scale"
+from sysibm.syscolumns as syscolumns
+inner join 
+  sysibm.systables systables 
+on 
+  syscolumns.tbname = systables.name 
+  and syscolumns.tbcreator = systables.creator
+where 
+  systables.dbname = '{{ database | upper }}' and
+  syscolumns.tbcreator = '{{ schema | upper }}' and
+  syscolumns.name = '{{ identifier | upper }}' and
+  syscolumns.hidden in ('', 'N')
+order by colno
 
   {% endcall %}
   {% set table = load_result('get_columns_in_relation').table %}
   {{ return(sql_convert_columns_in_relation(table)) }}
 {% endmacro %}
 
-
 {% macro ibmdb2__list_relations_without_caching(schema_relation) %}
+{{ log(">>> ibmdb2__list_relations_without_caching") }}
   {% call statement('list_relations_without_caching', fetch_result=True) -%}
 
+  {%- set database = case_relation_part(schema_relation.quote_policy['database'], schema_relation.database) -%}
   {%- set schema = case_relation_part(schema_relation.quote_policy['schema'], schema_relation.schema) -%}
 
-SELECT
-  '{{ schema_relation.database }}' AS "database",
-  TRIM(TABNAME) as "name",
-  TRIM(TABSCHEMA) as "schema",
-  CASE
-    WHEN TYPE = 'T' THEN 'table'
-    WHEN TYPE = 'V' THEN 'view'
-  END AS "table_type"
-FROM SYSCAT.TABLES
-WHERE
-  TABSCHEMA = '{{ schema }}' AND
-  TYPE IN('T', 'V')
- WITH UR
+select
+  dbname as "database",
+  trim(creator) as "schema",
+  trim(name) as "name",
+  case
+    when type = 'T' then 'table'
+    when type = 'V' then 'view'
+  end as "table_type"
+from sysibm.systables
+where
+  dbname = '{{ database | upper }}' and
+  creator = '{{ schema | upper }}' and
+  type in ('T', 'V')
+  with ur
+
   {% endcall %}
   {{ return(load_result('list_relations_without_caching').table) }}
 {% endmacro %}
 
 
 {% macro ibmdb2__rename_relation(from_relation, to_relation) -%}
+{{ log(">>> ibmdb2__rename_relation") }}
   {% call statement('rename_relation') -%}
 
   {% if from_relation.is_table %}
-RENAME TABLE {{ from_relation }} TO {{ to_relation.replace_path(schema=None) }}
+rename table {{ from_relation }} to {{ to_relation.replace_path(schema=none) }}
   {% endif %}
 
   {% if from_relation.is_view %}
@@ -193,52 +223,59 @@ RENAME TABLE {{ from_relation }} TO {{ to_relation.replace_path(schema=None) }}
 
 
 {% macro ibmdb2__list_schemas(database) %}
+{{ log(">>> ibmdb2__list_schemas") }}
   {% call statement('list_schemas', fetch_result=True, auto_begin=False) -%}
 
-SELECT DISTINCT
-  TRIM(SCHEMANAME) AS "schema"
-FROM SYSCAT.SCHEMATA
+  select distinct 
+    trim(creator) as "schema"
+  from sysibm.systables
+  where dbname = '{{ database | upper }}'
 
   {%- endcall %}
   {{ return(load_result('list_schemas').table) }}
 {% endmacro %}
 
-
 {% macro ibmdb2__drop_relation(relation) -%}
+{{ log(">>> ibmdb2__drop_relation") }}
   {% call statement('drop_relation', auto_begin=False) -%}
 
+  {%- set database = case_relation_part(relation.quote_policy['database'], relation.database) -%}
   {%- set schema = case_relation_part(relation.quote_policy['schema'], relation.schema) -%}
   {%- set identifier = case_relation_part(relation.quote_policy['identifier'], relation.identifier) -%}
 
-BEGIN
-  IF EXISTS (
-    SELECT TABNAME
-    FROM SYSCAT.TABLES
-    WHERE
-      TABSCHEMA = '{{ schema }}' AND
-      TABNAME = '{{ identifier }}' AND
-      TYPE = (CASE
-        WHEN '{{ relation.type }}' = 'view' THEN 'V' ELSE 'T'
-      END)
-  ) THEN
-    PREPARE stmt FROM 'DROP {{ relation.type | upper }} {{ relation }}';
-    EXECUTE stmt;
-    COMMIT;
-  END IF;
-END
+begin
+  declare v_count int;
+
+  select count(*) into v_count
+  from sysibm.systables
+  where
+    dbname = '{{ database | upper }}' and
+    creator = '{{ schema | upper }}' and
+      name = '{{ identifier }}' and
+      type = (case
+        when '{{ relation.type }}' = 'view' then 'V' else 'T'
+      end)
+
+  if v_count = 0 
+  then
+    prepare stmt from 'drop {{ relation.type | upper }} {{ database | upper }}.{{ relation | upper }}';
+    execute stmt;
+    commit;
+  end if;
+end
 
   {%- endcall %}
 {% endmacro %}
 
-
 {% macro ibmdb2__get_columns_in_query(select_sql) %}
+{{ log(">>> ibmdb2__get_columns_in_query") }}
   {% call statement('get_columns_in_query', fetch_result=True, auto_begin=False) -%}
 
-SELECT * FROM (
+select * from (
     {{ select_sql }}
-) AS dbt_sbq
-WHERE 0=1
-FETCH FIRST 0 ROWS ONLY
+) as dbt_sbq
+where 0=1
+fetch first 0 rows only
 
   {% endcall %}
   {{ return(load_result('get_columns_in_query').table.columns | map(attribute='name') | list) }}
@@ -246,19 +283,22 @@ FETCH FIRST 0 ROWS ONLY
 
 
 {% macro ibmdb2__truncate_relation(relation) %}
+{{ log(">>> ibmdb2__truncate_relation") }}
   {% call statement('truncate_relation') -%}
-TRUNCATE TABLE {{ relation }}
-IMMEDIATE
+truncate table {{ relation }}
+immediate
   {%- endcall %}
 {% endmacro %}
 
 
 {% macro ibmdb2__get_binding_char() %}
+{{ log(">>> ibmdb2__get_binding_char") }}
   {{ return('?') }}
 {% endmacro %}
 
 
 {% macro ibmdb2__snapshot_hash_arguments(args) -%}
+{{ log(">>> ibmdb2__snapshot_hash_arguments") }}
     hash({%- for arg in args -%}
         coalesce(cast({{ arg }} as varchar ), '')
         {% if not loop.last %} || '|' || {% endif %}
@@ -267,6 +307,7 @@ IMMEDIATE
 
 
 {% macro ibmdb2__post_snapshot(staging_relation) %}
+{{ log(">>> ibmdb2__post_snapshot") }}
     {% do adapter.truncate_relation(staging_relation) %}
     {% do adapter.drop_relation(staging_relation) %}
 {% endmacro %}

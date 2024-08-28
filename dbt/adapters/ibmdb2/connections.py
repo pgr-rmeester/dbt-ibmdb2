@@ -1,49 +1,84 @@
 from contextlib import contextmanager
+from enum import Enum
 
 from dataclasses import dataclass
 
 import dbt_common.exceptions
 from dbt.adapters.contracts.connection import Credentials
 from dbt.adapters.contracts.connection import AdapterResponse
-from dbt.adapters.contracts.connection import Connection
+
+# from dbt.adapters.contracts.connection import Connection
 from dbt.adapters.sql import SQLConnectionManager
 from dbt.adapters.events.logging import AdapterLogger
 
 from typing import (
-    Type,
-    Iterable,
-    Optional
+    # Type,
+    # Iterable,
+    Optional,
 )
 
-import ibm_db
+# import ibm_db
 import ibm_db_dbi
 
 logger = AdapterLogger("IBM DB2")
 
+
+@dataclass
+class AuthType:
+    BASIC_AUTH: str = "basic-auth"
+    KERBEROS: str = "kerberos"
+
+
+class SysType:
+    LUW: str = "luw"
+    ZOS: str = "z/os"
+
+
 @dataclass
 class IBMDB2Credentials(Credentials):
-    host: str
-    database: str
-    schema: str
-    user: str
-    password: str
-    port: int = 50000
-    protocol: str = 'TCPIP'
-    extra_connect_opts: Optional[str] = None
+    running_on: str = SysType.LUW
+    authentication: str = AuthType.BASIC_AUTH
+    dsn: Optional[str] = ""
+    host: Optional[str] = ""
+    database: Optional[str] = ""
+    schema: Optional[str] = ""
+    user: Optional[str] = ""
+    password: Optional[str] = ""
+    port: Optional[int] = 50000
+    protocol: Optional[str] = "TCPIP"
+    extra_connect_opts: Optional[str] = ""
 
     @property
     def type(self):
-        return 'ibmdb2'
-
-    def _connection_keys(self):
-        return ('host', 'database', 'schema', 'user', 'password', 'port', 'protocol', 'extra_connect_opts')
+        return "ibmdb2"
 
     @property
     def unique_field(self) -> str:
-        return self.host
+        if self.authentication == AuthType.BASIC_AUTH:
+            return self.host
+        if self.authentication == AuthType.KERBEROS:
+            return self.dsn
+        return ""
+
+    def _connection_keys(self):
+        if self.authentication == AuthType.BASIC_AUTH:
+            return (
+                "host",
+                "database",
+                "schema",
+                "user",
+                "password",
+                "port",
+                "protocol",
+                "extra_connect_opts",
+            )
+        if self.authentication == AuthType.KERBEROS:
+            return ("dsn",)
+        return (None,)
+
 
 class IBMDB2ConnectionManager(SQLConnectionManager):
-    TYPE = 'ibmdb2'
+    TYPE = "ibmdb2"
 
     @contextmanager
     def exception_handler(self, sql: str):
@@ -51,7 +86,7 @@ class IBMDB2ConnectionManager(SQLConnectionManager):
             yield
         except ibm_db_dbi.DatabaseError as exc:
             self.release()
-            logger.debug('ibm_db_dbi error: {}'.format(str(exc)))
+            logger.debug("ibm_db_dbi error: {}".format(str(exc)))
             logger.debug("Error running SQL: {}".format(sql))
             raise dbt_common.exceptions.DbtDatabaseError(str(exc))
         except Exception as exc:
@@ -62,29 +97,36 @@ class IBMDB2ConnectionManager(SQLConnectionManager):
 
     @classmethod
     def open(cls, connection):
-        if connection.state == 'open':
-            logger.debug('Connection is already open, skipping open.')
+        if connection.state == "open":
+            logger.debug("Connection is already open, skipping open.")
             return connection
 
-        credentials = connection.credentials
-
         def connect():
-            con_str = f"DATABASE={credentials.database}"
-            con_str += f";HOSTNAME={credentials.host}"
-            con_str += f";PORT={credentials.port}"
-            con_str += f";PROTOCOL={credentials.protocol}"
-            con_str += f";UID={credentials.user}"
-            con_str += f";PWD={credentials.password}"
+            credentials = connection.credentials
+            if credentials.authentication == AuthType.BASIC_AUTH:
+                con_str = (
+                    f"DATABASE={credentials.database}"
+                    f";HOSTNAME={credentials.host}"
+                    f";PORT={credentials.port}"
+                    f";PROTOCOL={credentials.protocol}"
+                    f";UID={credentials.user}"
+                    f";PWD={credentials.password}"
+                )
+                if credentials.extra_connect_opts:
+                    con_str += f";{credentials.extra_connect_opts}"
+            elif credentials.authentication == AuthType.KERBEROS:
+                con_str = f"{credentials.dsn};"
+            else:
+                raise ValueError(f"Not a valid auth type: {credentials.authentication}")
 
-            if credentials.extra_connect_opts is not None and credentials.extra_connect_opts != "":
-                con_str += f";{credentials.extra_connect_opts}"
-
-            handle = ibm_db_dbi.connect(con_str, '', '')
+            handle = ibm_db_dbi.connect(con_str, "", "")
             handle.set_autocommit(False)
 
             return handle
 
-        retryable_exceptions = [ibm_db_dbi.OperationalError,]
+        retryable_exceptions = [
+            ibm_db_dbi.OperationalError,
+        ]
 
         return cls.retry_connection(
             connection,
@@ -92,7 +134,7 @@ class IBMDB2ConnectionManager(SQLConnectionManager):
             logger=logger,
             retry_limit=3,
             retry_timeout=5,
-            retryable_exceptions=retryable_exceptions
+            retryable_exceptions=retryable_exceptions,
         )
 
     @classmethod
@@ -104,7 +146,7 @@ class IBMDB2ConnectionManager(SQLConnectionManager):
         try:
             connection.handle.close()
         except Exception as e:
-            logger.error('Error closing connection for cancel request')
+            logger.error("Error closing connection for cancel request")
             raise Exception(str(e))
 
     @classmethod
@@ -114,13 +156,10 @@ class IBMDB2ConnectionManager(SQLConnectionManager):
     @classmethod
     def get_response(cls, cursor) -> AdapterResponse:
 
-        message = 'OK'
+        message = "OK"
         rows = cursor.rowcount
 
-        return AdapterResponse(
-            _message=message,
-            rows_affected=rows
-        )
+        return AdapterResponse(_message=message, rows_affected=rows)
 
     def add_begin_query(self):
         pass

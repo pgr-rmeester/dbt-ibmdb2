@@ -1,16 +1,25 @@
 {% macro ibmdb2__get_show_grant_sql(relation) %}
 
+  {%- set database = case_relation_part(relation.quote_policy['database'], relation.database) -%}
   {%- set schema = case_relation_part(relation.quote_policy['schema'], relation.schema) -%}
   {%- set identifier = case_relation_part(relation.quote_policy['identifier'], relation.identifier) -%}
 
-  SELECT
-    AUTHID as "grantee",
-    PRIVILEGE as "privilege_type"
-  FROM SYSIBMADM.PRIVILEGES
-  WHERE AUTHID != CURRENT USER
-    AND OBJECTNAME = '{{ identifier }}'
-  {% if relation.schema %}
-    AND OBJECTSCHEMA = '{{ schema }}'
+select distinct
+    grantee AS "grantee",
+    case 
+        when selectauth = 'Y' then 'SELECT'
+        when insertauth = 'Y' then 'INSERT'
+        when updateauth = 'Y' then 'UPDATE'
+        when deleteauth = 'Y' then 'DELETE'
+        when alterauth = 'Y' then 'ALTER'
+        when indexauth = 'Y' then 'INDEX'
+    end as "privilege_type"
+from sysibm.systabauth
+where grantee != current sqlid
+    and dbname = '{{ database }}'
+    and ttname = '{{ identifier }}'
+    and tcreator = '{{ schema }}'
+
   {% endif %}
 
 {% endmacro %}

@@ -1,56 +1,62 @@
 {% macro ibmdb2__get_catalog(information_schema, schemas) -%}
 
   {%- call statement('catalog', fetch_result=True) -%}
-
-    WITH columns AS (
-      SELECT
-        COLNAME,
-        TYPENAME,
-        CURRENT_SERVER AS DATABASE, -- Should be replaced by DB from profile
-        TABNAME,
-        TABSCHEMA,
-        COLNO
-      FROM SYSCAT.COLUMNS
-    ),
-    tables AS (
-      SELECT
-        CURRENT_SERVER AS DATABASE, -- Should be replaced by DB  from profile
-        TABSCHEMA,
-        TABNAME,
-        OWNER,
-        CASE
-          WHEN TYPE = 'T' THEN 'TABLE' -- Upcase here to work with tests
-          WHEN TYPE = 'V' THEN 'VIEW'  -- Upcase here to work with tests
-        END AS TYPE
-      FROM SYSCAT.TABLES
-      WHERE TYPE IN('T', 'V')
-    )
-    SELECT
-      TRIM(tables.DATABASE) AS "table_database",
-      TRIM(tables.TABSCHEMA) AS "table_schema",
-      TRIM(tables.TABNAME) AS "table_name",
-      tables.TYPE AS "table_type",
-      NULL AS "table_comment",
-      TRIM(columns.COLNAME) AS "column_name",
-      columns.COLNO AS "column_index",
-      columns.TYPENAME AS "column_type",
-      NULL AS "column_comment",
-      tables.OWNER AS "table_owner"
-    FROM tables
-    INNER JOIN columns ON
-      columns.DATABASE = tables.DATABASE AND
-      columns.TABSCHEMA = tables.TABSCHEMA AND
-      columns.TABNAME = tables.TABNAME
-    WHERE (
+  
+    with db as (
+      select trim(name) as dbname, creator as schema 
+      from sysibm.sysdatabase
+      where ( -- moved this where clause up to eliminate unnecessary joins
         {%- for schema in schemas -%}
-          tables.TABSCHEMA = UPPER('{{ schema }}') {%- if not loop.last %} OR {% endif -%}
+        creator = UPPER('{{ schema }}') {%- if not loop.last %} OR {% endif -%}
         {%- endfor -%}
+      )
+    ),
+    tables as (
+      select
+        dbname, -- should be replaced by db  from profile
+        creator as schema,
+        trim(name) as name,
+        createdby as owner, -- user id who the object
+        case
+          when type = 'T' then 'TABLE' -- Upcase here to work with tests
+          when type = 'V' then 'VIEW'  -- Upcase here to work with tests
+        end as type
+      from sysibm.systables
+      where type in ('T', 'V')
+    ),
+    columns as (
+      select
+        trim(name) as name,
+        trim(coltype) as coltype,
+        tbname,
+        tbcreator as schema,
+        colno
+      from sysibm.syscolumns
     )
-    ORDER BY
-      tables.TABSCHEMA,
-      tables.TABNAME,
-      columns.COLNO
+    select
+      db.dbname as "table_database",
+      db.schema as "table_schema",
+      tables.name as "table_name",
+      tables.type as "table_type",
+      '' as "table_comment",
+      columns.name as "column_name",
+      columns.colno as "column_index",
+      columns.coltype as "column_type",
+      '' as "column_comment",
+      tables.owner as "table_owner"
+    from db 
+    inner join tables
+      on db.dbname = tables.dbname
+        and db.schema = tables.schema
+    inner join columns 
+      on columns.tbname = tables.name 
+          and columns.schema = tables.schema
+    order by
+      tables.schema,
+      tables.name,
+      columns.colno
 
   {%- endcall -%}
+
   {{ return(load_result('catalog').table) }}
 {%- endmacro %}
