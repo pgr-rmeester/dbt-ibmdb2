@@ -16,7 +16,7 @@
 {{ log(">>> ibmdb2__check_schema_exists <<<") }}
 {{ log(schema) }}
 
-  {%- set database = case_relation_part(information_database.quote_policy['database'], '') -%}
+  {%- set database = case_relation_part(information_schema.quote_policy['database'], 'not_defined') -%}
   {# This schema will ignore quoting and therefore also upper vs lowercase #}
   {%- set schema = case_relation_part(information_schema.quote_policy['schema'], schema) -%}
 
@@ -40,21 +40,21 @@
 {{ log(relation) }}
   {%- call statement('create_schema') -%}
 
+    {%- set database = case_relation_part(relation.quote_policy['database'], relation.without_identifier()) -%}
     {%- set schema = case_relation_part(relation.quote_policy['schema'], relation.without_identifier()) -%}
-    {{ log(schema) }}
-    begin
-      declare v_count int;
 
-      select count(*) into v_count
+    {% set sql -%}
+      select count(*)
       from sysibm.systables
-      where creator = '{{ schema }}';
+      where dbname = '{{ database }}' and creator = '{{ schema }}';)
+    {%- endset %}
 
-      if v_count = 0 then
-        prepare stmt from 'create schema {{ schema }}';
+    {%- if run_query(sql) == 0 -%}
+      begin
+        prepare stmt from 'create schema {{ database }}.{{ schema }}';
         execute stmt;
-      end if;
-    
-    end;
+      end;
+    {%- endif -%}  
   {%- endcall -%}
 {% endmacro %}
 
@@ -89,7 +89,7 @@ begin
     prepare stmt from 'drop schema {{ schema }} restrict';
     execute stmt;
   end if;
-end
+end;
 
   {% endcall %}
 {% endmacro %}
@@ -181,27 +181,27 @@ order by colno
 
 {% macro ibmdb2__list_relations_without_caching(schema_relation) %}
 {{ log(">>> ibmdb2__list_relations_without_caching") }}
-  {% call statement('list_relations_without_caching', fetch_result=True) -%}
 
   {%- set database = case_relation_part(schema_relation.quote_policy['database'], schema_relation.database) -%}
   {%- set schema = case_relation_part(schema_relation.quote_policy['schema'], schema_relation.schema) -%}
-
-select
-  dbname as "database",
-  trim(creator) as "schema",
-  trim(name) as "name",
-  case
-    when type = 'T' then 'table'
-    when type = 'V' then 'view'
-  end as "table_type"
-from sysibm.systables
-where
-  dbname = '{{ database | upper }}' and
-  creator = '{{ schema | upper }}' and
-  type in ('T', 'V')
-  with ur
-
-  {% endcall %}
+  
+  {% call statement('list_relations_without_caching', fetch_result=True) -%}
+    select
+      dbname as "database",
+      trim(creator) as "schema",
+      trim(name) as "name",
+      case
+        when type = 'T' then 'table'
+        when type = 'V' then 'view'
+      end as "table_type"
+    from sysibm.systables
+    where
+      dbname = '{{ database | upper }}' and
+      creator = '{{ schema | upper }}' and
+      type in ('T', 'V')
+      with ur
+  {%- endcall %}
+  
   {{ return(load_result('list_relations_without_caching').table) }}
 {% endmacro %}
 
@@ -210,9 +210,9 @@ where
 {{ log(">>> ibmdb2__rename_relation") }}
   {% call statement('rename_relation') -%}
 
-  {% if from_relation.is_table %}
-rename table {{ from_relation }} to {{ to_relation.replace_path(schema=none) }}
-  {% endif %}
+  {%- if from_relation.is_table -%}
+    rename table {{ from_relation }} to {{ to_relation.replace_path(schema=none) }}
+  {%- endif -%}
 
   {% if from_relation.is_view %}
     {% do exceptions.raise_compiler_error('IBMDB2 Adapter error: Renaming of views is not supported.') %}
@@ -224,6 +224,7 @@ rename table {{ from_relation }} to {{ to_relation.replace_path(schema=none) }}
 
 {% macro ibmdb2__list_schemas(database) %}
 {{ log(">>> ibmdb2__list_schemas") }}
+{{ log(database) }}
   {% call statement('list_schemas', fetch_result=True, auto_begin=False) -%}
 
   select distinct 
@@ -243,27 +244,24 @@ rename table {{ from_relation }} to {{ to_relation.replace_path(schema=none) }}
   {%- set schema = case_relation_part(relation.quote_policy['schema'], relation.schema) -%}
   {%- set identifier = case_relation_part(relation.quote_policy['identifier'], relation.identifier) -%}
 
-begin
-  declare v_count int;
+  {%- set sql -%}
+    select count(*)
+    from sysibm.systables
+    where
+      dbname = '{{ database | upper }}' and
+      creator = '{{ schema | upper }}' and
+        name = '{{ identifier | upper }}' and
+        type = (case
+          when '{{ relation.type }}' = 'view' then 'V' else 'T'
+        end);
+    {%- endset -%}
 
-  select count(*) into v_count
-  from sysibm.systables
-  where
-    dbname = '{{ database | upper }}' and
-    creator = '{{ schema | upper }}' and
-      name = '{{ identifier }}' and
-      type = (case
-        when '{{ relation.type }}' = 'view' then 'V' else 'T'
-      end)
-
-  if v_count = 0 
-  then
-    prepare stmt from 'drop {{ relation.type | upper }} {{ database | upper }}.{{ relation | upper }}';
-    execute stmt;
-    commit;
-  end if;
-end
-
+    {%- if run_query(sql) == 0 -%}
+      prepare stmt from 'drop {{ relation.type | upper }} {{ database | upper }}.{{ relation | upper }}';
+      execute stmt;
+      commit;
+      end;
+    {%- endif -%}  
   {%- endcall %}
 {% endmacro %}
 

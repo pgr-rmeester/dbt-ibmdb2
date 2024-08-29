@@ -40,8 +40,8 @@ class IBMDB2Credentials(Credentials):
     authentication: str = AuthType.BASIC_AUTH
     dsn: Optional[str] = ""
     host: Optional[str] = ""
-    database: Optional[str] = ""
-    schema: Optional[str] = ""
+    database: str = "default_database"
+    schema: str = "default_schema"
     user: Optional[str] = ""
     password: Optional[str] = ""
     port: Optional[int] = 50000
@@ -73,7 +73,11 @@ class IBMDB2Credentials(Credentials):
                 "extra_connect_opts",
             )
         if self.authentication == AuthType.KERBEROS:
-            return ("dsn",)
+            return (
+                "dsn",
+                "database",
+                "schema",
+            )
         return (None,)
 
 
@@ -115,7 +119,11 @@ class IBMDB2ConnectionManager(SQLConnectionManager):
                 if credentials.extra_connect_opts:
                     con_str += f";{credentials.extra_connect_opts}"
             elif credentials.authentication == AuthType.KERBEROS:
-                con_str = f"{credentials.dsn};"
+                con_str = (
+                    f"{credentials.dsn};"
+                    f"DATABASE={credentials.database}"
+                    f"SCHEMA={credentials.schema}"
+                )
             else:
                 raise ValueError(f"Not a valid auth type: {credentials.authentication}")
 

@@ -20,8 +20,6 @@ where grantee != current sqlid
     and ttname = '{{ identifier }}'
     and tcreator = '{{ schema }}'
 
-  {% endif %}
-
 {% endmacro %}
 
 {% macro ibmdb2__call_dcl_statements(dcl_statement_list) %}
