@@ -1,9 +1,5 @@
 
 {% macro case_relation_part(quoting, relation_part) %}
-
-{{ log(">>> case_relation_part <<<") }}
-{{ log(relation_part) }}
-
   {% if quoting == False %}
     {%- set relation_part = relation_part|upper -%}
   {% endif %}
@@ -12,9 +8,6 @@
 
 
 {% macro ibmdb2__check_schema_exists(information_schema, schema) -%}
-
-{{ log(">>> ibmdb2__check_schema_exists <<<") }}
-{{ log(schema) }}
 
   {%- set database = case_relation_part(information_schema.quote_policy['database'], 'not_defined') -%}
   {# This schema will ignore quoting and therefore also upper vs lowercase #}
@@ -36,8 +29,7 @@
 
 
 {% macro ibmdb2__create_schema(relation) -%}
-{{ log(">>> ibmdb2__create_schema <<<") }}
-{{ log(relation) }}
+
   {%- call statement('create_schema') -%}
 
     {%- set database = case_relation_part(relation.quote_policy['database'], relation.without_identifier()) -%}
@@ -61,7 +53,7 @@
 
 
 {% macro ibmdb2__drop_schema(relation) -%}
-{{ log(">>> ibmdb2__drop_schema") }}
+
   {%- call statement('drop_schema') -%}
 
   {%- set database = case_relation_part(relation.quote_policy['database'], relation.schema) -%}
@@ -96,7 +88,7 @@ end;
 
 
 {% macro ibmdb2__create_table_as(temporary, relation, sql) -%}
-{{ log(">>> ibmdb2__create_table_as") }}
+
   {%- set sql_header = config.get('sql_header', none) -%}
   {%- set table_space = config.get('table_space', none) -%}
   {%- set organize_by = config.get('organize_by', none) -%}
@@ -180,12 +172,11 @@ order by colno
 {% endmacro %}
 
 {% macro ibmdb2__list_relations_without_caching(schema_relation) %}
-{{ log(">>> ibmdb2__list_relations_without_caching") }}
 
   {%- set database = case_relation_part(schema_relation.quote_policy['database'], schema_relation.database) -%}
   {%- set schema = case_relation_part(schema_relation.quote_policy['schema'], schema_relation.schema) -%}
   
-  {% call statement('list_relations_without_caching', fetch_result=True) -%}
+  {% call statement('list_relations_without_caching', auto_begin=False, fetch_result=True) -%}
     select
       dbname as "database",
       trim(creator) as "schema",
@@ -207,7 +198,7 @@ order by colno
 
 
 {% macro ibmdb2__rename_relation(from_relation, to_relation) -%}
-{{ log(">>> ibmdb2__rename_relation") }}
+
   {% call statement('rename_relation') -%}
 
   {%- if from_relation.is_table -%}
@@ -223,8 +214,7 @@ order by colno
 
 
 {% macro ibmdb2__list_schemas(database) %}
-{{ log(">>> ibmdb2__list_schemas") }}
-{{ log(database) }}
+
   {% call statement('list_schemas', fetch_result=True, auto_begin=False) -%}
 
   select distinct 
@@ -237,7 +227,7 @@ order by colno
 {% endmacro %}
 
 {% macro ibmdb2__drop_relation(relation) -%}
-{{ log(">>> ibmdb2__drop_relation") }}
+
   {% call statement('drop_relation', auto_begin=False) -%}
 
   {%- set database = case_relation_part(relation.quote_policy['database'], relation.database) -%}
@@ -266,7 +256,7 @@ order by colno
 {% endmacro %}
 
 {% macro ibmdb2__get_columns_in_query(select_sql) %}
-{{ log(">>> ibmdb2__get_columns_in_query") }}
+
   {% call statement('get_columns_in_query', fetch_result=True, auto_begin=False) -%}
 
 select * from (
@@ -281,7 +271,7 @@ fetch first 0 rows only
 
 
 {% macro ibmdb2__truncate_relation(relation) %}
-{{ log(">>> ibmdb2__truncate_relation") }}
+
   {% call statement('truncate_relation') -%}
 truncate table {{ relation }}
 immediate
@@ -290,13 +280,11 @@ immediate
 
 
 {% macro ibmdb2__get_binding_char() %}
-{{ log(">>> ibmdb2__get_binding_char") }}
   {{ return('?') }}
 {% endmacro %}
 
 
 {% macro ibmdb2__snapshot_hash_arguments(args) -%}
-{{ log(">>> ibmdb2__snapshot_hash_arguments") }}
     hash({%- for arg in args -%}
         coalesce(cast({{ arg }} as varchar ), '')
         {% if not loop.last %} || '|' || {% endif %}
@@ -305,7 +293,6 @@ immediate
 
 
 {% macro ibmdb2__post_snapshot(staging_relation) %}
-{{ log(">>> ibmdb2__post_snapshot") }}
     {% do adapter.truncate_relation(staging_relation) %}
     {% do adapter.drop_relation(staging_relation) %}
 {% endmacro %}

@@ -121,8 +121,8 @@ class IBMDB2ConnectionManager(SQLConnectionManager):
             elif credentials.authentication == AuthType.KERBEROS:
                 con_str = (
                     f"{credentials.dsn};"
-                    f"DATABASE={credentials.database}"
-                    f"SCHEMA={credentials.schema}"
+                    # f"DATABASE={credentials.database}"
+                    # f"SCHEMA={credentials.schema}"
                 )
             else:
                 raise ValueError(f"Not a valid auth type: {credentials.authentication}")
